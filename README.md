@@ -104,6 +104,20 @@ Pass extra server scripts as arguments when starting the app:
 uv run main.py my_custom_server.py
 ```
 
+## MCP Inspector
+
+MCP Inspector is a browser-based tool for inspecting and testing your MCP server — you can browse available tools, resources, and prompts, and call them interactively without running the full app.
+
+To launch it:
+
+```bash
+uv run mcp dev mcp_server.py
+```
+
+Then open the URL shown in the terminal (usually `http://localhost:5173`) in your browser.
+
+---
+
 ## Development
 
 ### Adding New Documents
