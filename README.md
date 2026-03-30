@@ -175,6 +175,35 @@ The `/format` command is a good illustration of how all the layers work together
 
 In real applications, guard against this by adding an explicit instruction to the prompt: *only use information already present in the document, do not add anything new.*
 
+### Why you only need to run `main.py`
+
+You might wonder why `mcp_server.py` and `mcp_client.py` don't need to be started separately. The answer is in `main.py` — it launches `mcp_server.py` automatically as a **subprocess**:
+
+```python
+command, args = ("uv", ["run", "mcp_server.py"])
+
+doc_client = await stack.enter_async_context(
+    MCPClient(command=command, args=args)
+)
+```
+
+`MCPClient.connect()` hands this command to the OS, which starts `mcp_server.py` as a background process. The two processes then talk to each other over **stdin / stdout** — this is MCP's stdio transport.
+
+```
+You run: uv run main.py
+              │
+              ├── spawns subprocess ──→ mcp_server.py (background process)
+              │                               ↑ ↓  stdin / stdout
+              └── MCPClient ─────────────────┘
+                  (mcp_client.py, imported as a class)
+```
+
+- `mcp_server.py` is **launched by** `main.py` — you never start it manually
+- `mcp_client.py` is **imported as a class** — it's not a script you run
+- When `main.py` exits, the subprocess is cleaned up automatically via `AsyncExitStack`
+
+The reason stdin / stdout is used as the transport is that it makes MCP servers language-agnostic — the server could be written in Python, Node.js, or Rust. As long as it speaks the MCP protocol over standard I/O, the client doesn't care.
+
 ---
 
 ## Development
