@@ -1,6 +1,8 @@
 # LEARN.md — MCP Chat CLI
 
 > A guide to understanding this project deeply — not just what it does, but *why* it works the way it does, what you can learn from it, and what traps to avoid.
+>
+> This project is based on and modified from the [Anthropic online learning course](https://anthropic.skilljar.com/).
 
 ---
 

@@ -1,5 +1,7 @@
 # MCP Chat
 
+> This project is based on and modified from the [Anthropic online learning course](https://anthropic.skilljar.com/). The original used Anthropic's Claude via Google Vertex AI; this version has been migrated to use the OpenAI API.
+
 MCP Chat is a command-line interface application for interactive AI chat, powered by OpenAI models. It supports document retrieval via `@mentions`, command-based prompts via `/commands`, and extensible tool integrations through the MCP (Model Context Protocol) architecture.
 
 ## Prerequisites
