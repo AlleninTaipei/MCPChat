@@ -6,7 +6,7 @@
 
 ## What Is This, Really?
 
-At its surface, this is a command-line chat interface for Claude AI. But zoom out, and it's something more interesting: a working example of the **agentic loop pattern** — the architectural blueprint that powers every modern AI assistant that can actually *do things*, not just talk.
+At its surface, this is a command-line chat interface for AI models (powered by OpenAI). But zoom out, and it's something more interesting: a working example of the **agentic loop pattern** — the architectural blueprint that powers every modern AI assistant that can actually *do things*, not just talk.
 
 Think of it like this: a basic chatbot is a parrot. It hears you, it responds. This project is more like a chess player — it can hear your request, decide it needs to look something up, look it up, think about what it found, potentially look up something else, and *then* answer you. That back-and-forth between the AI and its tools is the heart of what makes "AI agents" different from plain LLMs.
 
@@ -18,15 +18,15 @@ Think of it like this: a basic chatbot is a parrot. It hears you, it responds. T
 You type something
     → CLI (prompt-toolkit) captures it elegantly
     → CliChat preprocesses: pulls in @documents, resolves /commands
-    → Chat sends message to Claude with available tools described
-    → Claude thinks... and might ask to use a tool
+    → Chat sends message to the LLM with available tools described
+    → LLM thinks... and might ask to use a tool
     → ToolManager executes the tool via an MCP server
-    → Result goes back to Claude
-    → Claude thinks again... maybe requests another tool
-    → Eventually: Claude says "I'm done" → you see the answer
+    → Result goes back to the LLM
+    → LLM thinks again... maybe requests another tool
+    → Eventually: LLM says "I'm done" → you see the answer
 ```
 
-That middle loop — **LLM → tool request → execute → back to LLM** — runs until Claude signals it's satisfied. This is the **agentic loop**, and almost every serious AI application is built around it.
+That middle loop — **LLM → tool request → execute → back to LLM** — runs until the model signals it's satisfied. This is the **agentic loop**, and almost every serious AI application is built around it.
 
 ---
 
@@ -38,8 +38,8 @@ The entire app is async (`async/await` everywhere). This wasn't an aesthetic cho
 ### prompt-toolkit
 This is what makes the CLI feel *good* — autocomplete that pops up when you type `@` or `/`, history you can scroll through, colored output. The standard Python `input()` function would've been fine for a toy, but prompt-toolkit makes it feel like a real tool. It's the difference between Notepad and VS Code. Worth knowing for any serious CLI project.
 
-### Anthropic SDK (via Google Vertex AI)
-Instead of calling Anthropic's API directly, this project routes through **Google Cloud's Vertex AI**. Why? Enterprise deployments often require this for billing, compliance, and data residency reasons. The `AnthropicVertex` client handles the routing transparently — you write the same code, it just hits a different endpoint. The tradeoff: you need GCP credentials set up, which adds operational complexity.
+### OpenAI SDK
+This project uses the **OpenAI Python SDK** to call GPT models. The `openai.OpenAI()` client automatically reads your `OPENAI_API_KEY` from the environment — no extra configuration needed. One API key, and you're running. This is intentionally simpler than cloud-platform-routed alternatives, making it a great starting point before moving to enterprise setups.
 
 ### MCP (Model Context Protocol)
 This is the most architecturally significant piece. MCP is a protocol (like HTTP, but for AI tool use) that lets Claude talk to "servers" that expose tools, resources, and prompts. Instead of hardcoding every capability into your app, you define servers — each a standalone process — and Claude can discover and use their tools dynamically.
@@ -58,7 +58,7 @@ The project has a clean layered design. Each layer has one job:
 | CLI | `core/cli.py` | Capture user input beautifully (autocomplete, history) |
 | Chat Logic | `core/cli_chat.py` | Pre-process input (resolve @docs, /commands) |
 | Agent Loop | `core/chat.py` | The core LLM↔tool loop |
-| LLM Wrapper | `core/claude.py` | Talk to Claude via Vertex AI |
+| LLM Wrapper | `core/claude.py` | Talk to OpenAI models |
 | Tool Manager | `core/tools.py` | Aggregate tools from MCP servers, execute them |
 | MCP Client | `mcp_client.py` | Speak the MCP protocol to a server process |
 | MCP Server | `mcp_server.py` | A server that provides document tools and resources |
@@ -73,17 +73,19 @@ Open `core/chat.py`. The `run()` method is the beating heart of this project:
 
 ```python
 while True:
-    response = await self.claude.send(messages, tools)
+    response = self.claude_service.chat(messages=self.messages, tools=tools)
 
-    if response.stop_reason == "end_turn":
-        break  # Claude is done, return the answer
+    self.claude_service.add_assistant_message(self.messages, response)
 
-    if response.stop_reason == "tool_use":
-        # Claude wants to use a tool
-        tool_results = await self.tools.execute_all(response.tool_calls)
-        # Add results back to message history
-        messages.append(tool_results)
-        # Loop again — Claude now has the results
+    if response.choices[0].finish_reason == "tool_calls":
+        # The model wants to use a tool
+        tool_result_messages = await ToolManager.execute_tool_requests(self.clients, response)
+        # Each result is its own role="tool" message in OpenAI's format
+        self.messages.extend(tool_result_messages)
+        # Loop again — the model now has the results
+    else:
+        # finish_reason == "stop" — the model is done
+        break
 ```
 
 This loop is what makes the system "agentic." The LLM isn't just generating one response — it's *reasoning* across multiple turns, using tools as extensions of its thinking. If you understand this loop, you understand 80% of how modern AI agents work.
@@ -108,7 +110,7 @@ This is a subtle but important UX principle: give the user direct control over c
 
 This project uses MCP in *both* directions:
 - `mcp_server.py` — **as a server**, exposing document tools and resources *to* Claude
-- `mcp_client.py` — **as a client**, connecting *to* those servers and translating MCP responses into Anthropic-compatible tool results
+- `mcp_client.py` — **as a client**, connecting *to* those servers and translating MCP responses into OpenAI-compatible tool results
 
 This dual role is unusual and educational. Most apps only use one side. Seeing both helps you understand the full protocol flow.
 
@@ -135,17 +137,21 @@ If you're building any app that manages multiple async connections (databases, M
 ## Lessons Learned and Pitfalls to Avoid
 
 ### 1. MCP Message Type Mismatch
-When converting MCP `PromptMessage` objects to Anthropic's `MessageParam` format, there's a subtle trap: MCP returns content as either a plain dict *or* a Pydantic model object, depending on context. If you just call `.model_dump()` on everything, you'll crash when a dict shows up.
+When converting MCP `PromptMessage` objects to plain dicts for the message history, there's a subtle trap: MCP returns content as either a plain dict *or* a Pydantic model object, depending on context. If you just call `.model_dump()` on everything, you'll crash when a dict shows up.
 
-The fix in this codebase:
+The fix in this codebase (`core/cli_chat.py`):
 ```python
-content = msg.content if isinstance(msg.content, dict) else msg.content.model_dump()
+content_type = (
+    content.get("type", None)
+    if isinstance(content, dict)
+    else getattr(content, "type", None)
+)
 ```
 
 Lesson: **always check what types a library actually returns at runtime**, not just what the type hints say. Type hints are aspirational; runtime behavior is truth.
 
-### 2. Vertex AI vs. Direct Anthropic API
-The `AnthropicVertex` client requires a GCP project and region. If you try to run this without proper GCP credentials configured (`gcloud auth application-default login`), you'll get cryptic auth errors. The `.env` file needs `GCP_PROJECT_ID` and `GCP_REGION` — forgetting either causes silent failures that look like network errors.
+### 2. OpenAI Tool Results Are Individual Messages
+In the Anthropic API, all tool results go back as a single user message containing a list. In the OpenAI API, **each tool result is its own separate message** with `role: "tool"`. Getting this wrong silently produces broken conversations — the model will ignore results or hallucinate. Always use `messages.extend(tool_results)`, not `messages.append(...)`.
 
 ### 3. The Agentic Loop Needs a Safety Valve
 As mentioned above: in production, always add `max_iterations` to any agentic loop. An LLM in a bad state can generate tool call after tool call, burning tokens and money. Add a guard.
@@ -160,8 +166,8 @@ When `main.py` runs `python mcp_server.py` as a subprocess, that server lives an
 
 ## New Things You Can Learn From This Project
 
-### The Anthropic Tool Use API
-Claude's tool use follows a specific pattern: you describe tools in a schema (name, description, input JSON Schema), Claude returns a `tool_use` block when it wants to call one, you run the tool and return a `tool_result` block, and Claude continues. This project implements that loop cleanly in `core/chat.py` and `core/tools.py`. Reading these is a great primer on the raw Anthropic API.
+### The OpenAI Tool Use API
+OpenAI's function calling follows a specific pattern: you describe tools as `{"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}`, the model returns `finish_reason: "tool_calls"` when it wants to call one, you run the tool and add the result as a `role: "tool"` message, and the model continues. This project implements that loop cleanly in `core/chat.py` and `core/tools.py`. Reading these is a great primer on how OpenAI tool use actually works end-to-end.
 
 ### FastMCP for Rapid Server Development
 `mcp_server.py` uses `FastMCP`, which dramatically reduces boilerplate for writing MCP servers. Decorators like `@mcp.tool()` and `@mcp.resource()` let you expose functions and data to Claude with minimal setup. If you ever need to give Claude access to a custom data source or API, FastMCP is the fastest path.
@@ -170,7 +176,7 @@ Claude's tool use follows a specific pattern: you describe tools in a schema (na
 The completers in `core/cli.py` show how to build context-aware autocomplete. The `WordCompleter` and custom completer classes give users a guided, IDE-like experience in the terminal. If you're building developer tools, this library is worth deep-diving.
 
 ### The "Thin Wrapper" Pattern for LLM Clients
-`core/claude.py` is intentionally thin — it just wraps the Anthropic client and handles one specific concern (sending messages with tools). This is good design: if Anthropic changes their API, there's exactly one place to update. If you want to swap Claude for GPT-4, you only touch this file.
+`core/claude.py` is intentionally thin — it just wraps the OpenAI client and handles one specific concern (sending messages with tools). This is good design: if OpenAI changes their API, there's exactly one place to update. This project is actually a real-world example of this paying off — the original version used Anthropic's Vertex AI client, and migrating to OpenAI only required touching this single file and `core/tools.py`.
 
 ---
 
@@ -191,7 +197,7 @@ A few meta-lessons about how this project was built:
 ## Future Directions (If You Build on This)
 
 - **Persistent storage** for the document server (SQLite would be perfect)
-- **Multiple Claude models** selectable at runtime
+- **Multiple OpenAI models** selectable at runtime (just change `OPENAI_MODEL` in `.env`)
 - **Streaming responses** — Claude can stream tokens, making responses feel faster
 - **Tool call limits** — add `max_tool_calls` to the agentic loop
 - **Rich formatting** — use `rich` library for better terminal output
