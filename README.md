@@ -116,6 +116,21 @@ uv run mcp dev mcp_server.py
 
 Then open the URL shown in the terminal (usually `http://localhost:5173`) in your browser.
 
+### Tips for using the Inspector
+
+- When calling `read_doc_contents`, use the full filename including extension as the `doc_id`, e.g. `deposition.md`.
+- Available document IDs are: `deposition.md`, `report.pdf`, `financials.docx`, `outlook.pdf`, `plan.md`, `spec.txt`.
+
+### Why edits don't appear in `mcp_server.py`
+
+You might notice that after calling `edit_document` in the Inspector, the `docs` dictionary inside `mcp_server.py` doesn't change. This is expected — and understanding why is a useful lesson.
+
+The `docs` dict lives in **memory (RAM)**, not in the file. When the server starts, Python reads `mcp_server.py` and loads `docs` into memory. `edit_document` modifies that in-memory copy, which is why a subsequent `read_doc_contents` call returns the updated content. But the source file itself is never touched — it's just the recipe book. The cook writes on a notepad, not back into the book.
+
+When you restart the server, the notepad is thrown away and `docs` is reloaded from the original source file — so all edits disappear.
+
+This is a known limitation of the current design. If you want edits to persist across restarts, `docs` would need to be backed by a real store (a JSON file, SQLite, etc.) rather than an in-memory dict.
+
 ---
 
 ## Development
