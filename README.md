@@ -131,6 +131,50 @@ When you restart the server, the notepad is thrown away and `docs` is reloaded f
 
 This is a known limitation of the current design. If you want edits to persist across restarts, `docs` would need to be backed by a real store (a JSON file, SQLite, etc.) rather than an in-memory dict.
 
+### End-to-end testing
+
+The fastest way to verify the whole system is working is to run through these five cases in order:
+
+**1. Basic chat** — confirms OpenAI connectivity
+```
+> What is 1 + 1?
+```
+
+**2. `@` document injection** — confirms MCP server is running and document content is injected into the prompt
+```
+> What is @deposition.md about?
+```
+
+**3. Tool use** — confirms the agentic loop, ToolManager, and MCP tool execution are all working
+```
+> Use the read_doc_contents tool to read report.pdf and tell me what it says.
+```
+
+**4. Tool use + edit** — confirms multi-turn tool use and in-memory edits
+```
+> Use edit_document to change the word "condenser" to "cooling" in report.pdf, then read it back to confirm.
+```
+
+**5. `/` command** — confirms MCP Prompt retrieval and the full command pipeline
+```
+> /format financials.docx
+```
+
+Each case exercises a different layer of the stack. If all five pass, the entire end-to-end flow is verified.
+
+### What happens during `/format`
+
+The `/format` command is a good illustration of how all the layers work together:
+
+1. `_process_command()` in `core/cli_chat.py` detects the `/` prefix and fetches the `format` prompt from the MCP server
+2. The prompt instructs the model to reformat the document using Markdown and use the `edit_document` tool to save the result
+3. The model calls `edit_document` — the agentic loop in `core/chat.py` detects `finish_reason == "tool_calls"` and executes the tool
+4. The result is added back to the message history, the loop runs again, and the model outputs the final formatted document
+
+**One thing to be aware of:** if the original document is very short (like `financials.docx`, which is just one sentence), the model may invent plausible-sounding content — budget figures, categories, etc. — that doesn't exist in the source. This is normal LLM behaviour: when information is sparse, the model fills in what seems reasonable rather than saying "I don't know."
+
+In real applications, guard against this by adding an explicit instruction to the prompt: *only use information already present in the document, do not add anything new.*
+
 ---
 
 ## Development
